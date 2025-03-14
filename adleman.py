@@ -15,36 +15,40 @@ def adleman_discrete_log(a, b, p):
     for q, e in prime_powers:
         m = q**e
         gamma = pow(a, (p-1) // q, p)
+        # beta вычисляем, но далее не используем (можно использовать для проверки)
         beta = pow(b, (p-1) // q, p)
 
-        # Поиск x_i mod q^e
+        # Поиск x_i по модулю q^e
         x_i = 0
         for k in range(e):
-            exponent = (p-1) // q**(k+1)
-            lhs = pow(b * mod_inverse(pow(a, x_i, p), 1, p))
+            exponent = (p - 1) // (q**(k+1))
+            # Вычисляем lhs = (b * (a^(x_i))^(-1)) mod p
+            lhs = (b * mod_inverse(pow(a, x_i, p), p)) % p
             term = pow(lhs, exponent, p)
             
-            # Поиск d_k такого, что gamma^(d_k) ≡ term mod p
+            # Находим такое d_k, что gamma^(d_k) ≡ term (mod p)
             d_k = 0
             while pow(gamma, d_k, p) != term:
                 d_k += 1
-            
-            x_i += d_k * q**k
-
+            x_i += d_k * (q**k)
         x_mods.append((x_i, m))
 
-    # Шаг 4: Китайская теорема об остатках
+    # Шаг 4: Применяем Китайскую теорему об остатках
+    # Сначала вычисляем полный модуль (N)
+    N = 1
+    for (_, mod) in x_mods:
+        N *= mod
     x = 0
-    total_mod = 1
     for residue, mod in x_mods:
-        total_mod *= mod
-        term = residue * (total_mod // mod) * mod_inverse(total_mod // mod, mod)
-        x += term
-    return x % total_mod
+        N_i = N // mod
+        inv = mod_inverse(N_i, mod)
+        x += residue * N_i * inv
+    return x % N
 
 # Пример использования
-a = 2
-b = 9
-p = 11  # Простое число, p-1 = 10 = 2 * 5 (гладкое)
-x = adleman_discrete_log(a, b, p)
-print(f"Решение: {x} (проверка: {a}^{x} mod {p} = {pow(a, x, p)} = {b})")
+if __name__ == "__main__":
+    a = 2
+    b = 9
+    p = 11  # Простое число, p-1 = 10 = 2 * 5 (гладкое)
+    x = adleman_discrete_log(a, b, p)
+    print(f"Решение: {x} (проверка: {a}^{x} mod {p} = {pow(a, x, p)} = {b})")
