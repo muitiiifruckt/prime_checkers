@@ -10,61 +10,76 @@ def legendre_symbol(a, p):
     return pow(a, (p - 1) // 2, p)
 
 def generate_factor_base(n, B):
-    """Формирует факторную базу: простые p ≤ B, для которых (n/p)=1."""
-    sieve = [True] * (B+1)
-    sieve[0] = sieve[1] = False
-    primes = []
-    for p in range(2, B+1):
+    """
+    Формирует факторную базу: простые p ≤ B, для которых (n/p)=1.
+    Используется векторизация для решета с помощью NumPy.
+    """
+    sieve = np.ones(B+1, dtype=bool)
+    sieve[:2] = False
+    for p in range(2, int(B**0.5)+1):
         if sieve[p]:
-            if legendre_symbol(n, p) == 1:
-                primes.append(p)
-            for i in range(p*p, B+1, p):
-                sieve[i] = False
-    return primes
+            sieve[p*p:B+1:p] = False
+    primes = np.nonzero(sieve)[0]
+    # Фильтрация простых, удовлетворяющих (n/p)==1
+    factor_base = [int(p) for p in primes if legendre_symbol(n, int(p)) == 1]
+    return factor_base
 
 def quadratic_polynomial(A, x, n):
     """Возвращает значение Q(x) = (A+x)^2 - n."""
     return (A + x)**2 - n
 
 def sieve_interval(n, A, M, factor_base):
-    """Сегментированное решето для интервала x в [-M, M]."""
-    interval = range(-M, M+1)
-    Q_values = [quadratic_polynomial(A, x, n) for x in interval]
-    log_Q = [math.log(abs(q)) if q != 0 else 0 for q in Q_values]
-    # Копия логарифмических значений для корректировки
-    sieve_array = log_Q.copy()
-
-    # Для каждого простого из базы находим все решения уравнения: (A+x)^2 = n (mod p)
-    smooth_candidates = {}
-    for p in factor_base:
-        # Решаем t^2 ≡ n (mod p). Находим решения методом перебора (p небольшие)
-        sols = []
-        for t in range(p):
-            if (t*t - n) % p == 0:
-                sols.append(t)
-        # Для каждого решение переводим его к x: A+x ≡ t (mod p)
-        for t in sols:
-            # Находим минимальное x0 в интервале, удовлетворяющее A+x ≡ t (mod p)
-            x0 = (t - A) % p
-            # Перебор x = x0 + k*p, попадающих в интервал [-M, M]
-            for k in range(-((M - x0) // p) - 1, ((M - x0) // p) + 2):
-                x = x0 + k * p
-                if -M <= x <= M:
-                    idx = x + M  # сдвиг, чтобы индекс начинался с 0
-                    sieve_array[idx] -= log(p)
+    """
+    Сегментированное решето для интервала x в [-M, M] с векторизацией.
+    Если n достаточно мал (вмещается в 64 бита), используются стандартные типы,
+    иначе применяется dtype=object с вычислением логарифмов через list comprehension.
+    Предполагается, что quadratic_polynomial(A, x, n) = (A + x)**2 - n.
+    """
+    # Определяем тип данных для xs и Q_values
+    if n.bit_length() < 63:
+        dtype = np.int64
+        xs = np.arange(-M, M+1, dtype=dtype)
+        Q_values = (A + xs)**2 - n
+        abs_Q = np.abs(Q_values)
+        # Приводим к float64 для логарифма
+        log_Q = np.where(abs_Q == 0, 0.0, np.log(abs_Q.astype(np.float64)))
+        sieve_array = log_Q.copy()
+    else:
+        dtype = object
+        xs = np.array(list(range(-M, M+1)), dtype=dtype)
+        Q_values = np.array([(A + x)**2 - n for x in xs], dtype=dtype)
+        abs_Q = np.array([abs(q) for q in Q_values], dtype=object)
+        log_Q = np.array([0.0 if a == 0 else math.log(float(a)) for a in abs_Q], dtype=float)
+        sieve_array = log_Q.copy()
     
-    # Выбираем кандидатов, где остаточное значение близко к 0 (с некоторой поправкой)
+    # Обработка для каждого простого из факторной базы
+    for p in factor_base:
+        logp = math.log(p)
+        ts = np.arange(p)
+        sols = ts[((ts * ts - n) % p) == 0]
+        for t in sols:
+            x0 = (t - A) % p
+            k_min = int(np.ceil((-M - x0) / p))
+            k_max = int(np.floor((M - x0) / p))
+            if k_min > k_max:
+                continue
+            ks = np.arange(k_min, k_max + 1)
+            xs_candidates = x0 + ks * p
+            valid = (xs_candidates >= -M) & (xs_candidates <= M)
+            indices = xs_candidates[valid] + M  # смещение для индексирования
+            sieve_array[indices.astype(int)] -= logp
+    
     threshold = 0.5
-    smooth_candidates = []
-    for i, val in enumerate(sieve_array):
-        if val < threshold:
-            x = i - M
-            smooth_candidates.append((x, Q_values[i]))
+    candidate_indices = np.where(sieve_array < threshold)[0]
+    smooth_candidates = [(int(i - M), Q_values[i]) for i in candidate_indices]
+    
     return smooth_candidates
 
 def trial_division(Q, factor_base):
-    """Пробуем разложить Q на простые из факторной базы.
-       Возвращает словарь {p: exp} и остаток (в случае, если остался большой множитель)."""
+    """
+    Пытается разложить Q на простые из факторной базы.
+    Возвращает словарь {p: exp} и остаток (если остался большой множитель).
+    """
     exponents = {}
     temp = abs(Q)
     for p in factor_base:
@@ -74,91 +89,92 @@ def trial_division(Q, factor_base):
         while temp % p == 0:
             temp //= p
             exp += 1
-        if exp > 0:
+        if exp:
             exponents[p] = exp
     return exponents, temp
 
-def find_dependencies(matrix):
-    """Реализуем гауссовское исключение над GF(2). 
-       Возвращает список решений (каждое решение – набор индексов строк, дающих зависимость)."""
-    # Преобразуем матрицу в тип int
-    mat = np.array(matrix, dtype=int)
-    rows, cols = mat.shape
-    # Индексы, участвующие в комбинациях
-    dependency_sets = []
-    # Будем хранить преобразования в виде двоичной матрицы (каждая строка – битовый вектор изначальной позиции)
-    transform = np.eye(rows, dtype=int)
+def find_dependencies(exp_vectors):
+    """
+    Гауссово исключение по модулю 2 с использованием битовых масок.
+    Каждая строка представлена как целое число, где i-й бит соответствует элементу.
+    Возвращает список зависимостей (наборы индексов строк, дающих нулевой вектор).
+    """
+    n_rows = len(exp_vectors)
+    n_cols = len(exp_vectors[0])
+    # Преобразуем каждую строку в битовую маску
+    bit_rows = []
+    for vec in exp_vectors:
+        bits = 0
+        for bit in vec:
+            bits = (bits << 1) | (bit & 1)
+        bit_rows.append(bits)
     
-    col = 0
-    for row in range(rows):
-        if col >= cols:
-            break
+    # Запоминаем преобразования: для каждой строки сохраняем битовую маску, где установлен бит i означает, что строка i участвует в комбинации
+    transforms = [1 << i for i in range(n_rows)]
+    
+    pivot_cols = {}
+    for col in range(n_cols):
         pivot = None
-        for i in range(row, rows):
-            if mat[i, col] == 1:
-                pivot = i
-                break
+        for i in range(n_rows):
+            # Если столбец уже обработан пропускаем строки без установленного нужного бита
+            if (bit_rows[i] >> (n_cols - 1 - col)) & 1:
+                if i not in pivot_cols.values():
+                    pivot = i
+                    break
         if pivot is None:
-            col += 1
-            row -= 1  # повторить итерацию для следующего столбца
             continue
-        if pivot != row:
-            # Меняем строки местами
-            mat[[row, pivot]] = mat[[pivot, row]]
-            transform[[row, pivot]] = transform[[pivot, row]]
-        # Обнуляем столбец для всех остальных строк
-        for i in range(rows):
-            if i != row and mat[i, col] == 1:
-                mat[i] ^= mat[row]
-                transform[i] ^= transform[row]
-        col += 1
-
-    # Любая строка, не имеющая ведущего 1, дает зависимость
-    # Здесь можно перебрать комбинации, чтобы найти ненулевые зависимости.
-    # В данном примере мы просто возвращаем строки преобразования, где матрица нулевая.
-    for i in range(rows):
-        if not any(mat[i]):
-            dependency_sets.append(np.nonzero(transform[i])[0].tolist())
-    return dependency_sets
+        pivot_cols[col] = pivot
+        for i in range(n_rows):
+            if i != pivot and ((bit_rows[i] >> (n_cols - 1 - col)) & 1):
+                bit_rows[i] ^= bit_rows[pivot]
+                transforms[i] ^= transforms[pivot]
+    
+    dependencies = []
+    full_mask = (1 << n_cols) - 1
+    for i in range(n_rows):
+        if bit_rows[i] == 0:
+            # Извлекаем индексы строк из битовой маски
+            dep = [j for j in range(n_rows) if (transforms[i] >> j) & 1]
+            dependencies.append(dep)
+    return dependencies
 
 def quadratic_sieve(n):
-    # Выбор параметров (значения можно оптимизировать под размер n)
-    B = int(math.exp(math.sqrt(math.log(n)*math.log(math.log(n)))) * 0.18)
+    """
+    Основная функция квадратичного решета.
+    Подбирает параметры, собирает соотношения и ищет нетривиальные делители.
+    """
+    # Подбор параметров; параметр B можно дополнительно оптимизировать
+    B = int(math.exp(math.sqrt(math.log(n) * math.log(math.log(n)))) * 0.18)
     factor_base = generate_factor_base(n, B)
     
-    A = math.isqrt(n) + 1
-    M = B  # интервал можно подобрать эмпирически; часто M ~ B
+    A = isqrt(n) + 1
+    M = B  # начальный интервал, может быть увеличен
     smooth_relations = []
-    xs = []  # хранение значений x
-    exp_vectors = []  # векторы экспонентов по модулю 2
+    xs = []       # храним значения x
+    exp_vectors = []  # векторы показателей (по модулю 2)
     
-    # Сбор достаточного числа гладких соотношений
-    # Требуется чуть больше соотношений, чем размер факторной базы  
     required = len(factor_base) + 5
-    x0 = -M
     while len(smooth_relations) < required:
-        print(f"A, B, M, factor_base: {A},{B},{M},{len(factor_base)}")
+        # Можно отключить вывод для повышения производительности
+        # print(f"A={A}, B={B}, M={M}, факторов в базе: {len(factor_base)}")
         candidates = sieve_interval(n, A, M, factor_base)
         for x, Qx in candidates:
             exponents, rem = trial_division(Qx, factor_base)
-            if rem == 1:  # полностью B-гладкий
+            if rem == 1:  # если Qx полностью B-гладкий
                 xs.append(x)
-                # Формируем вектор показателей по модулю 2
                 vec = [exponents.get(p, 0) % 2 for p in factor_base]
                 exp_vectors.append(vec)
                 smooth_relations.append((x, Qx, exponents))
                 if len(smooth_relations) >= required:
                     break
-        # Если недостаточно соотношений, можно расширить интервал
-        M =round(M *1.3)
+        M = round(M * 1.3)  # расширяем интервал при необходимости
     
-    # Решение системы уравнений по модулю 2
     dependencies = find_dependencies(exp_vectors)
     if not dependencies:
-        print("Не найдены зависимости, попробуйте расширить интервал или подобрать параметры.")
+        print("Не найдены зависимости, попробуйте расширить интервал или подобрать другие параметры.")
         return None
     
-    # Пробуем каждую зависимость для нахождения нетривиального делителя
+    # Используем найденные зависимости для получения делителей
     for dep in dependencies:
         X = 1
         Y = 1
@@ -169,7 +185,6 @@ def quadratic_sieve(n):
             Y = (Y * Qx) % n
             for p, exp in exponents.items():
                 combined_exponents[p] = combined_exponents.get(p, 0) + exp
-        # Каждый показатель делится на 2
         Y_sqrt = 1
         for p, exp in combined_exponents.items():
             Y_sqrt = (Y_sqrt * pow(p, exp // 2, n)) % n
@@ -184,13 +199,15 @@ if __name__ == "__main__":
     do = time.time()
     # Пример: число 100-бит (примерное число, около 10^30)
     # Здесь можно подставить своё число, например:
-    kolichetvo_bit = 75
+    kolichetvo_bit = 60
     n = generate_N(kolichetvo_bit)  # замените на конкретное 100-битное число
+    #n =729148987615913831
+    print(n)
     factors = quadratic_sieve(n)
     if factors:
         print("Найденные делители:", factors)
     else:
         print("Факторизация не удалась, попробуйте изменить параметры.")
     posle = time.time()
-    print(f"Время работы при {kolichetvo_bit} bit : {round(posle-do)} sec")
+    print(f"Время работы при {kolichetvo_bit} bit : {round(posle-do,3)} sec")
     print()
