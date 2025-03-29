@@ -30,50 +30,63 @@ def quadratic_polynomial(A, x, n):
 
 def sieve_interval(n, A, M, factor_base):
     """
-    Сегментированное решето для интервала x в [-M, M] с векторизацией.
-    Если n достаточно мал (вмещается в 64 бита), используются стандартные типы,
-    иначе применяется dtype=object с вычислением логарифмов через list comprehension.
-    Предполагается, что quadratic_polynomial(A, x, n) = (A + x)**2 - n.
+    Сегментированное решето для интервала x в [-M, M].
+    Вычисляет Q(x) = (A+x)^2 - n и корректирует логарифмические значения для поиска гладких чисел.
+    
+    Если n достаточно мало (bit_length < 63), используется векторизация с NumPy.
+    Для больших чисел (например, до 120 бит) применяется режим со списковыми вычислениями с оптимизированными циклами.
     """
-    # Определяем тип данных для xs и Q_values
+    threshold = 0.5  # порог для выбора кандидатов
+
     if n.bit_length() < 63:
-        dtype = np.int64
-        xs = np.arange(-M, M+1, dtype=dtype)
+        # Векторизированный режим с использованием np.int64
+        xs = np.arange(-M, M+1, dtype=np.int64)
         Q_values = (A + xs)**2 - n
         abs_Q = np.abs(Q_values)
-        # Приводим к float64 для логарифма
         log_Q = np.where(abs_Q == 0, 0.0, np.log(abs_Q.astype(np.float64)))
         sieve_array = log_Q.copy()
+        
+        for p in factor_base:
+            logp = math.log(p)
+            ts = np.arange(p)
+            sols = ts[((ts * ts - n) % p) == 0]
+            for t in sols:
+                x0 = (t - A) % p
+                # Вычисляем k_min и k_max точно, чтобы x = x0 + k*p попадало в [-M, M]
+                k_min = int(np.ceil((-M - x0) / p))
+                k_max = int(np.floor((M - x0) / p))
+                # Вычисляем индексы сразу (без проверки, поскольку границы гарантируют попадание в интервал)
+                indices = x0 + np.arange(k_min, k_max+1) * p + M
+                sieve_array[indices.astype(int)] -= logp
+        
+        candidate_indices = np.where(sieve_array < threshold)[0]
+        smooth_candidates = [(int(i - M), Q_values[i]) for i in candidate_indices]
+    
     else:
-        dtype = object
-        xs = np.array(list(range(-M, M+1)), dtype=dtype)
-        Q_values = np.array([(A + x)**2 - n for x in xs], dtype=dtype)
-        abs_Q = np.array([abs(q) for q in Q_values], dtype=object)
-        log_Q = np.array([0.0 if a == 0 else math.log(float(a)) for a in abs_Q], dtype=float)
+        # Режим для больших чисел с использованием списковых вычислений
+        xs = list(range(-M, M+1))
+        Q_values = [(A + x)**2 - n for x in xs]
+        log_Q = [0.0 if q == 0 else math.log(abs(q)) for q in Q_values]
         sieve_array = log_Q.copy()
-    
-    # Обработка для каждого простого из факторной базы
-    for p in factor_base:
-        logp = math.log(p)
-        ts = np.arange(p)
-        sols = ts[((ts * ts - n) % p) == 0]
-        for t in sols:
-            x0 = (t - A) % p
-            k_min = int(np.ceil((-M - x0) / p))
-            k_max = int(np.floor((M - x0) / p))
-            if k_min > k_max:
-                continue
-            ks = np.arange(k_min, k_max + 1)
-            xs_candidates = x0 + ks * p
-            valid = (xs_candidates >= -M) & (xs_candidates <= M)
-            indices = xs_candidates[valid] + M  # смещение для индексирования
-            sieve_array[indices.astype(int)] -= logp
-    
-    threshold = 0.5
-    candidate_indices = np.where(sieve_array < threshold)[0]
-    smooth_candidates = [(int(i - M), Q_values[i]) for i in candidate_indices]
+        
+        for p in factor_base:
+            logp = math.log(p)
+            # Решаем уравнение t^2 ≡ n (mod p) перебором по t в [0, p-1]
+            sols = [t for t in range(p) if (t*t - n) % p == 0]
+            for t in sols:
+                x0 = (t - A) % p
+                # Вычисляем границы k таким образом, чтобы x = x0 + k*p попадало в [-M, M]
+                k_min = int(math.ceil((-M - x0) / p))
+                k_max = int(math.floor((M - x0) / p))
+                # Перебор по k без лишней проверки
+                for k in range(k_min, k_max+1):
+                    idx = x0 + k * p + M
+                    sieve_array[idx] -= logp
+        
+        smooth_candidates = [(i - M, Q_values[i]) for i, v in enumerate(sieve_array) if v < threshold]
     
     return smooth_candidates
+
 
 def trial_division(Q, factor_base):
     """
@@ -199,7 +212,7 @@ if __name__ == "__main__":
     do = time.time()
     # Пример: число 100-бит (примерное число, около 10^30)
     # Здесь можно подставить своё число, например:
-    kolichetvo_bit = 60
+    kolichetvo_bit = 70
     n = generate_N(kolichetvo_bit)  # замените на конкретное 100-битное число
     #n =729148987615913831
     print(n)

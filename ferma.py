@@ -22,7 +22,7 @@ def factorization_ferma(N):
 if __name__ == "__main__":
     bits = 60
     N = generate_N(bits)
-    p, q = factorization_ferma(N)
+    p, q = factorization_ferma(658661)
     print(f"N = {N}")
     print()
     print(f"p, q = {p, q}")
