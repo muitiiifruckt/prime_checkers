@@ -12,4 +12,4 @@ def generate_N(bits):
     N = p * q
     return N  
 if __name__ == "__main__":
-    print(generate_N(80))
+    print(generate_N(40))

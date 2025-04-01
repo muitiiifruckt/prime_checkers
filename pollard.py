@@ -66,10 +66,6 @@ def factorize(N):
     return factorize(divisor) + factorize(N // divisor)
 
 if __name__ == "__main__":
-    N = int(input("Введите число N (до 100 бит): "))
-    if N < 2:
-        print("Число должно быть больше 1.")
-    else:
-        print(f"Факторизация числа {N}:")
-        factors = factorize(N)
-        print(factors)
+    N = int(880612586747802414069241)
+    factors = factorize(N)
+    print(factors)
